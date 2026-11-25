@@ -229,6 +229,125 @@ def windows(path, sec):
     return 0
 
 
+_PRIO = None
+
+
+def prio_load():
+    """CISA KEV (эксплуатируются в атаках) + EPSS (вероятность эксплуатации за 30 дней) — офлайн из tools/cache."""
+    global _PRIO
+    if _PRIO is not None:
+        return _PRIO
+    kev, epss, meta = {}, {}, []
+    kp = os.path.join(HERE, "tools", "cache", "kev.json")
+    ep = os.path.join(HERE, "tools", "cache", "epss.csv.gz")
+    if os.path.exists(kp):
+        k = json.load(open(kp, encoding="utf-8"))
+        kev = {v["cveID"]: v for v in k.get("vulnerabilities", [])}
+        meta.append("CISA KEV %s (%d)" % (k.get("catalogVersion", "?"), len(kev)))
+    if os.path.exists(ep):
+        import gzip
+        with gzip.open(ep, "rt") as f:
+            first = f.readline()
+            for line in f:
+                c, _, rest = line.partition(",")
+                if c.startswith("CVE-"):
+                    epss[c] = float(rest.split(",")[0])
+        m = re.search(r"score_date:(\d{4}-\d\d-\d\d)", first)
+        meta.append("EPSS %s" % (m.group(1) if m else "?"))
+    _PRIO = (kev, epss, " · ".join(meta) or "нет данных (tools/cache/kev.json, epss.csv.gz)")
+    return _PRIO
+
+
+def priorities(rows):
+    """rows: [(пакет, установлено, исправлено_в, {CVE})] -> строки отчёта + краткая сводка."""
+    kev, epss, meta = prio_load()
+    hot, top = [], []
+    for pk, ver, fx, cves in rows:
+        for c in cves:
+            if c in kev:
+                v = kev[c]
+                hot.append((pk, ver, fx, c, v.get("vulnerabilityName", "")[:70], v.get("knownRansomwareCampaignUse", "") == "Known"))
+            if c in epss:
+                top.append((epss[c], c, pk, ver, fx))
+    top.sort(reverse=True)
+    seen, top_u = set(), []
+    for t in top:
+        if t[1] not in seen:
+            seen.add(t[1]); top_u.append(t)
+    L = ["", "## Приоритет: что закрыть в первую очередь", "", "Источники: %s. KEV — уязвимости, которые **уже используются в реальных атаках**; EPSS — вероятность атаки в ближайшие 30 дней." % meta, ""]
+    if hot:
+        L += ["### СРОЧНО — есть в каталоге CISA KEV (%d)" % len(hot), "", "| пакет | установлено | исправлено в | CVE | что это | вымогатели |", "|---|---|---|---|---|---|"]
+        L += ["| %s | %s | %s | %s | %s | %s |" % (a, b, c, d, e, "да" if f else "—") for a, b, c, d, e, f in hot]
+    else:
+        L += ["- В каталоге CISA KEV совпадений нет — уязвимостей, которые сейчас массово используют в атаках, не найдено."]
+    if top_u:
+        L += ["", "### Наибольший шанс атаки (EPSS, топ-10)", "", "| CVE | EPSS | пакет | установлено | исправлено в |", "|---|---|---|---|---|"]
+        L += ["| %s | %.1f%% | %s | %s | %s |" % (c, e * 100, pk, ver, fx) for e, c, pk, ver, fx in top_u[:10]]
+    summary = "приоритет: KEV %d · EPSS≥10%%: %d · макс. EPSS %s" % (len(hot), sum(1 for t in top_u if t[0] >= 0.1), ("%.1f%% (%s)" % (top_u[0][0] * 100, top_u[0][1])) if top_u else "—")
+    return L, summary, hot, top_u
+
+
+def to_html(md, title):
+    """Markdown отчёта -> один самодостаточный HTML (тёмная тема, цвета уровней)."""
+    import html as H
+    out, intable, inlist, incode = [], False, False, False
+    def inl(t):
+        t = H.escape(t)
+        t = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", t)
+        t = re.sub(r"`(.+?)`", r"<code>\1</code>", t)
+        t = re.sub(r"\b(CRITICAL|КРИТИЧ\w*|ВЫСОКИЙ|СРОЧНО)\b", r'<span class="c">\1</span>', t)
+        t = re.sub(r"\b(HIGH|СРЕДНИЙ)\b", r'<span class="h">\1</span>', t)
+        t = re.sub(r"\b(CVE-\d{4}-\d+)\b", r'<a href="https://nvd.nist.gov/vuln/detail/\1">\1</a>', t)
+        return t
+    for line in md.splitlines():
+        if line.startswith("```"):
+            out.append("</pre>" if incode else "<pre>"); incode = not incode; continue
+        if incode:
+            out.append(H.escape(line)); continue
+        if line.startswith("|"):
+            cells = [c.strip() for c in line.strip("|").split("|")]
+            if all(re.fullmatch(r"-+", c) for c in cells):
+                continue
+            if not intable:
+                out.append("<table><tr>" + "".join("<th>%s</th>" % inl(c) for c in cells) + "</tr>"); intable = True
+            else:
+                out.append("<tr>" + "".join("<td>%s</td>" % inl(c) for c in cells) + "</tr>")
+            continue
+        if intable:
+            out.append("</table>"); intable = False
+        if line.startswith("- "):
+            if not inlist:
+                out.append("<ul>"); inlist = True
+            out.append("<li>%s</li>" % inl(line[2:])); continue
+        if inlist:
+            out.append("</ul>"); inlist = False
+        m = re.match(r"^(#{1,3}) (.*)", line)
+        if m:
+            out.append("<h%d>%s</h%d>" % (len(m.group(1)), inl(m.group(2)), len(m.group(1))))
+        elif line.strip():
+            out.append("<p>%s</p>" % inl(line))
+    if intable: out.append("</table>")
+    if inlist: out.append("</ul>")
+    css = ("body{background:#0f1419;color:#e6e6e6;font:15px/1.5 system-ui,sans-serif;max-width:1150px;margin:24px auto;padding:0 16px}"
+           "h1{color:#7ee787;border-bottom:2px solid #30363d;padding-bottom:8px}h2{color:#79c0ff;margin-top:32px}h3{color:#ffa657}"
+           "table{border-collapse:collapse;width:100%;margin:8px 0;font-size:13px}th,td{border:1px solid #30363d;padding:5px 8px;text-align:left;vertical-align:top}"
+           "th{background:#161b22}tr:nth-child(even) td{background:#12171d}code,pre{background:#161b22;border-radius:4px;padding:2px 5px}pre{padding:10px;overflow-x:auto}"
+           ".c{color:#ff7b72;font-weight:700}.h{color:#ffa657;font-weight:700}a{color:#79c0ff}"
+           "footer{margin-top:40px;color:#8b949e;font-size:12px;border-top:1px solid #30363d;padding-top:8px}")
+    return ("<!doctype html><html lang=ru><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>%s</title><style>%s</style>"
+            "<body>%s<footer>white_hat · проверка только чтением · отчёт для администратора · каждое действие в журнале с цепочкой SHA-256 (wh verify)</footer></body></html>"
+            % (H.escape(title), css, "\n".join(out)))
+
+
+def write_report(rep, L, title):
+    md = "\n".join(L) + "\n"
+    open(rep, "w", encoding="utf-8").write(md)
+    hp = rep[:-3] + ".html"
+    open(hp, "w", encoding="utf-8").write(to_html(md, title))
+    print("отчёт:", rep, "\nкрасивый отчёт (браузер):", hp)
+    return hp
+
+
 def offline(path, sec, host, osname):
     """Сверка БЕЗ интернета: слепок сервера (os-release + dpkg status из выгрузки) -> trivy на локальной базе."""
     import shutil, subprocess
@@ -284,18 +403,21 @@ def offline(path, sec, host, osname):
          "## Обновить в первую очередь", "", "| пакет | установлено | исправлено в | CRIT | HIGH | MED | LOW | CVE (примеры) |", "|---|---|---|---|---|---|---|---|"]
     for (pk, ver), e in fix:
         L.append("| %s | %s | %s | %d | %d | %d | %d | %s |" % (pk, ver, max(e["fixed"], key=vkey), e["sev"]["CRITICAL"], e["sev"]["HIGH"], e["sev"]["MEDIUM"], e["sev"]["LOW"], ", ".join(sorted(e["cves"])[:4])))
+    PL, psum, _, _ = priorities([(pk, ver, max(e["fixed"], key=vkey), e["cves"]) for (pk, ver), e in fix])
+    L[L.index("## Итог") + 2:L.index("## Итог") + 2] = ["- **" + psum + "**"]
+    L += PL
     L += ["", "## Без исправления пока", "", "| пакет | установлено | уязвимостей |", "|---|---|---|"] + ["| %s | %s | %d |" % (k[0], k[1], c) for k, c in opn[:25]]
     hy = hygiene(sec)
     if hy:
         L += ["", "## Гигиена сервера (настройки, только чтение)", ""] + ["- **%s** — %s" % (lv, tx) for lv, tx in hy]
-    open(rep, "w", encoding="utf-8").write("\n".join(L) + "\n")
     print("\nОБНОВИТЬ: %d пакетов · CRITICAL %d · HIGH %d · MEDIUM %d · LOW %d" % (len(fix), tot["CRITICAL"], tot["HIGH"], tot["MEDIUM"], tot["LOW"]))
     for (pk, ver), e in fix[:12]:
         print("  %-20s %-26s -> %-26s C%d H%d M%d" % (pk, ver, max(e["fixed"], key=vkey), e["sev"]["CRITICAL"], e["sev"]["HIGH"], e["sev"]["MEDIUM"]))
     print("без исправления: %d пакетов" % len(opn))
     for lv, tx in hy:
         print("  [%s] %s" % (lv, tx))
-    print("отчёт:", rep)
+    print("  " + psum)
+    write_report(rep, L, "Проверка версий ПО — " + host)
     add(path, "выгрузка версий " + host); add(rep, "отчёт сверки (офлайн, trivy) " + host)
     return 0
 
@@ -415,7 +537,7 @@ def scan(path, force_offline=False):
                 cv.update(cves(d))
         if fx:
             target = max({f for _, f in fx}, key=vkey)
-            fix_rows.append((n, v, target, len(fx), dict(lab), sorted(cv)[:6], pk[(n, v)]))
+            fix_rows.append((n, v, target, len(fx), dict(lab), sorted(cv), pk[(n, v)]))
         if op:
             open_rows.append((n, v, len(op), pk[(n, v)]))
     fix_rows.sort(key=lambda r: (-sum(r[4].get(k, 0) for k in ("high", "critical", "бюллетень")), -r[3]))
@@ -431,7 +553,10 @@ def scan(path, force_offline=False):
          "## Обновить в первую очередь (исправление уже выпущено)", "",
          "| пакет | установлено | исправлено в | уязвимостей | метки | CVE (примеры) |", "|---|---|---|---|---|---|"]
     for n, v, t, c, lab, cv, bins in fix_rows:
-        L.append("| %s | %s | %s | %d | %s | %s |" % (n, v, t, c, ", ".join("%s %d" % kv for kv in lab.items()) or "—", ", ".join(cv) or "—"))
+        L.append("| %s | %s | %s | %d | %s | %s |" % (n, v, t, c, ", ".join("%s %d" % kv for kv in lab.items()) or "—", ", ".join(cv[:6]) or "—"))
+    PL, psum, _, _ = priorities([(n, v, t, set(cv)) for n, v, t, c, lab, cv, bins in fix_rows])
+    L[L.index("## Итог") + 2:L.index("## Итог") + 2] = ["- **" + psum + "**"]
+    L += PL
     L += ["", "## Без исправления пока (следить за обновлениями)", "", "| пакет | установлено | уязвимостей |", "|---|---|---|"]
     L += ["| %s | %s | %d |" % (n, v, c) for n, v, c, _ in open_rows[:25]]
     if failed:
@@ -441,7 +566,6 @@ def scan(path, force_offline=False):
         L += ["", "## Гигиена сервера (настройки, только чтение)", ""] + ["- **%s** — %s" % (lv, tx) for lv, tx in hy]
     if sec.get("stack"):
         L += ["", "## Версии веб-стека из выгрузки", "", "```"] + sec["stack"] + ["```"]
-    open(rep, "w", encoding="utf-8").write("\n".join(L) + "\n")
     print("\nОБНОВИТЬ (есть исправление): %d пакетов" % len(fix_rows))
     for n, v, t, c, lab, cv, bins in fix_rows[:12]:
         print("  %-22s %-28s -> %-28s уязв %-3d %s" % (n, v, t, c, " ".join(cv[:3])))
@@ -450,7 +574,8 @@ def scan(path, force_offline=False):
         print("  ВНИМАНИЕ: не проверено %d пакетов (OSV не ответил) — повтори wh check" % len(failed))
     for lv, tx in hy:
         print("  [%s] %s" % (lv, tx))
-    print("отчёт:", rep)
+    print("  " + psum)
+    write_report(rep, L, "Проверка версий ПО — " + host)
     add(path, "выгрузка версий " + host)
     add(rep, "отчёт сверки " + host)
     return 0

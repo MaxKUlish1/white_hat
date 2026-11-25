@@ -84,6 +84,7 @@ print(textwrap.fill(x.get("description", ""), 110))'
     ok "область scope.txt" "$(grep -v '^#' scope.txt | tr '\n' ' ' | sed 's/^$/пусто (wh start IP)/')"
     ok "задача (клятва)" "$(cat task.txt 2>/dev/null || echo 'нет — ИИ только читает; дать: wh start IP')"
     ok "текущий проект" "$(cat projects/.current 2>/dev/null || echo 'нет')"
+    ok "приоритеты KEV / EPSS" "$(python3 -c 'import json;k=json.load(open("tools/cache/kev.json"));print("KEV",k["catalogVersion"])' 2>/dev/null || echo нет) · EPSS $(ls -l --time-style=+%F tools/cache/epss.csv.gz 2>/dev/null | awk '{print $6}')"
     ok "база trivy / grype / nuclei" "$(du -sh tools/cache/trivy tools/cache/grype tools/cache/nuclei-templates 2>/dev/null | awk '{print $1}' | tr '\n' ' ')"
     ok "интернет (OSV)" "$(curl -s -m 6 -o /dev/null -w '%{http_code}' https://api.osv.dev/v1/vulns/DSA-5000-1 | sed 's/200/есть/;s/000/НЕТ — сверка дома/')"
     ok "надзор ИИ (хуки)" "$(grep -c guard.py .claude/settings.json) сторож, $(grep -c nadzor.py .claude/settings.json) капсулы"
@@ -125,7 +126,8 @@ ART
    3  Проверка СНАРУЖИ, без логина            9  Журнал (последние записи)
    4  Проверка версий (дали логин)            d  Готовность (doctor)
    5  Настройки SSH                           s  Схема «как работает» (браузер)
-   6  HTTPS                                   c  Позвать ИИ-агента (claude)
+   6  HTTPS                                   o  Открыть отчёт в браузере
+                                              c  Позвать ИИ-агента (claude)
                                               0  Выход
 M
       k=$(ask "  выбор: ")
@@ -138,6 +140,7 @@ M
         6) "$WH/wh" tls "$(ask '  IP: ')";;
         7) "$WH/wh" cve "$(ask '  CVE (например CVE-2023-48795): ')";;
         8) "$WH/wh" report;;
+        o) "$WH/wh" open;;
         9) "$WH/wh" log 25;;
         d) "$WH/wh" doctor;;
         s) "$WH/wh" about;;
@@ -157,6 +160,15 @@ M
     [ "$1" = "--dry" ] && { echo "(--dry: на GitHub не отправлено)"; exit 0; }
     git push https://github.com/MaxKUlish1/white_hat.git public:main && J "publish: GitHub обновлён"
     echo "https://github.com/MaxKUlish1/white_hat";;
+  open)   # wh open — открыть последний красивый отчёт (HTML) в браузере
+    H=$(ls -t report_*.html out/ИТОГ_*.html 2>/dev/null | head -n1); [ -n "$H" ] || { echo "отчётов ещё нет"; exit 1; }
+    echo "открываю: $H"; J "open: $H"; (xdg-open "$H" || firefox "$H") >/dev/null 2>&1 &;;
+  update-db) # wh update-db — обновить офлайн-базы (нужен интернет): KEV, EPSS, trivy, grype, шаблоны nuclei
+    J "update-db: обновление баз"
+    curl -sfL -m 60 -o tools/cache/kev.json.new https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json && mv tools/cache/kev.json.new tools/cache/kev.json && echo "KEV: ok"
+    curl -sfL -m 180 -o tools/cache/epss.csv.gz.new https://epss.empiricalsecurity.com/epss_scores-current.csv.gz && mv tools/cache/epss.csv.gz.new tools/cache/epss.csv.gz && echo "EPSS: ok"
+    trivy image --download-db-only --quiet && echo "trivy: ok"; grype db update -q && echo "grype: ok"
+    nuclei -duc -update-templates -ud tools/cache/nuclei-templates -silent >/dev/null 2>&1 && echo "nuclei: ok"; J "update-db: готово";;
   plan)   # wh plan <IP> — план работ для админа (что делаю / чего не делаю / данные / остановка)
     need "$1"; P="out/ПЛАН_$1_$TS.txt"
     cat > "$P" <<EOP
@@ -205,7 +217,7 @@ wh tls <IP> [порт]      HTTPS (testssl)             wh sshaudit <IP>    на
 wh web <IP>             веб: ответ, сервер, техн.   wh nuclei <IP>      только по отдельному разрешению
 wh code <папка>         разбор кода у себя          wh shell            терминал: каждая команда в журнал
 wh winversions <IP>     Windows-сервер (OpenSSH)    wh doctor           готовность: инструменты, ключ, базы, сеть
-wh menu                 ЭКРАН С ПУНКТАМИ (проще всего)   wh publish        обновить GitHub (делает человек)
+wh menu                 ЭКРАН С ПУНКТАМИ (проще всего)   wh open           отчёт в браузере · wh update-db  обновить базы   wh publish        обновить GitHub (делает человек)
 wh outside <IP>         СНАРУЖИ без логина         wh plan <IP>        план работ для админа      wh about            схема «как работает» в браузере
 wh demo                 показ офлайн (сторож, хэши) wh log [N] | undo | verify | report
 EOF
