@@ -11,7 +11,7 @@ SERVICES = {"api.osv.dev", "nvd.nist.gov", "github.com", "osv.dev", "security-tr
 PROTECTED = {"guard.py", "nadzor.py", "check.py", "jlog.py", "wh", "env.sh", "version.sh", "version.ps1", "scope.txt",
              "journal.tsv", "task.txt", ".claude", "keys", ".git", ".gitignore", ".current"}
 NET = r"\b(ssh|scp|sftp|rsync|curl|wget|nc|ncat|socat|telnet|ping|ftp|psql|mysql|nuclei|httpx|subfinder|testssl\.sh|testssl|ssh-audit|ssh-keyscan|git\s+(push|clone|fetch|pull))\b"
-WH_NET = r"^\s*(\./)?wh\s+(versions|winversions|fp|tls|web|sshaudit|outside)\s+(\S+)(\s+[\w.-]+)?\s*$"
+WH_NET = r"^\s*(\./)?wh\s+(versions|winversions|fp|tls|web|sshaudit|outside)\s+(\S+)(\s+[\w.:-]+){0,3}\s*$"
 FORBID = [
     (r"\bsudo\b|\bsu\b|\bpkexec\b|\bdoas\b", "повышение прав (sudo/su)"),
     (r"\b(systemctl|service)\s+(restart|stop|start|reload|disable|enable|mask)\b", "управление службами"),
@@ -21,7 +21,7 @@ FORBID = [
     (r"\brm\b[^|;&]*\s-[a-zA-Z]*[rR]|\brm\s+--recursive|\bfind\b[^|;&]*-delete|\bshred\b|\bmkfs|\bdd\b[^|;&]*of=", "удаление/затирание"),
     (r"\b(mysqldump|pg_dump|pg_dumpall|mongodump)\b", "выгрузка баз данных"),
     (r"/dev/(tcp|udp)/|\bpython[0-9.]*\s+-c\b|\bperl\s+-e\b|\bruby\s+-e\b|\bnode\s+-e\b|\b(ba|z|da)?sh\s+-c\b|\beval\b|\bbase64\s+(-d|--decode)\b|\bxxd\s+-r\b", "обход сторожа (сокеты/eval/скрытый код)"),
-    (r"(^|[\s;&|])(\./)?wh\s+(start|nuclei|key|ssh|shell|undo|publish)\b", "это решает только человек (wh start/nuclei/key/ssh/shell/undo/publish)"),
+    (r"(^|[\s;&|])(\./)?wh\s+(start|nuclei|key|ssh|shell|undo|publish|go|menu)\b", "это решает только человек (wh start/nuclei/key/ssh/shell/undo/publish)"),
     (r"keys/(?!wh_ed25519\.pub\b)|wh_ed25519(?!\.pub)|\bkeys/\*|id_(rsa|ed25519|ecdsa)\b|\.ssh/", "ключи — только человеку"),
     (r"\b(curl|wget)\b[^|;&]*\s(-d|--data\S*|-F|--form|-T|--upload-file|-X\s*(POST|PUT|PATCH|DELETE))\b", "отправка данных наружу"),
 ]
