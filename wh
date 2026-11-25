@@ -115,7 +115,8 @@ print(textwrap.fill(x.get("description", ""), 110))'
  ╚════════════════════════════════════════════════════════════════╝
 ART
       printf '\033[0m\n'
-      echo "  область: $(grep -v '^#' scope.txt | tr '\n' ' ' | sed 's/^ *$/— пусто —/')   задача: $(cat task.txt 2>/dev/null || echo '—')"
+      A=$(grep -v '^#' scope.txt | tr '\n' ' '); P=$(cat projects/.current 2>/dev/null)
+      echo "  область: ${A:-— пусто (пункт 1) —}   проект: ${P:-—}   клятва: $( [ -f task.txt ] && echo есть || echo 'нет — ИИ только читает')"
       echo "  журнал: $(python3 nadzor.py verify 2>&1 | tail -n1 | cut -c1-90)"
       cat <<'M'
 
