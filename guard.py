@@ -102,7 +102,7 @@ def check_bash(cmd, cwd):
 
 TASK = os.path.join(HERE, "task.txt")
 CUR = os.path.join(HERE, "projects", ".current")
-READ_ONLY_BASH = r"^\s*((cat|less|head|tail|ls|grep|wc|file|stat|pwd|echo)\b[^>|;&]*|(\./)?wh\s+(log|verify|doctor|help|cve)\b.*)$"
+READ_ONLY_BASH = r"^\s*((cat|less|head|tail|ls|grep|wc|file|stat|pwd|echo)\b[^>|;&]*|(\./)?wh\s+(log|verify|doctor|help|cve|project)\b.*)$"
 
 
 def current_project():
@@ -121,7 +121,7 @@ def decide(ev):
         if tool in ("Read", "Glob", "Grep") or (tool == "Bash" and re.match(READ_ONLY_BASH, cmd)):
             pass
         else:
-            return (cmd or tool), "нет клятвы: сначала человек объявляет задачу и проект — wh start <IP>"
+            return (cmd or tool), "нет клятвы: сначала открой проект — wh project list / wh project new <имя> \"<чем занимаюсь>\""
     if tool == "Bash":
         text = inp.get("command", "")
         return text, check_bash(text, cwd)

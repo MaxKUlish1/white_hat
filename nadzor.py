@@ -98,9 +98,10 @@ if __name__ == "__main__":
         changed = [l[3:] for l in git("status", "--porcelain").stdout.splitlines() if l[3:] != "journal.tsv"]
         sha = ""
         if changed:
-            git("add", "-A"); git("commit", "-q", "-m", "человек: " + txt[:200])
+            git("add", "-A"); git("commit", "-q", "-m", ("ИИ через пульт: " if os.environ.get("CLAUDECODE") else "человек: ") + txt[:200])
             sha = git("rev-parse", "--short", "HEAD").stdout.strip()
-        record("человек [%s]" % task(), txt + ((" → файлы: %s · коммит %s" % (", ".join(changed[:6]), sha)) if sha else ""),
+        who = "ИИ через пульт" if os.environ.get("CLAUDECODE") else "человек"
+        record("%s [%s]" % (who, task()), txt + ((" → файлы: %s · коммит %s" % (", ".join(changed[:6]), sha)) if sha else ""),
                hashlib.sha256(txt.encode()).hexdigest())
         git("add", "journal.tsv"); git("commit", "-q", "-m", "журнал"); sys.exit(0)
     if a[0] == "add":

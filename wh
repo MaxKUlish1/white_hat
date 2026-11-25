@@ -18,10 +18,8 @@ case "$CMD" in
     python3 -c "import ipaddress,sys; n=ipaddress.ip_network(sys.argv[1],strict=False); sys.exit(0 if n.prefixlen>=24 else 1)" "$1" 2>/dev/null || { echo "СТОП: нужен IP или подсеть не шире /24 (например 10.1.2.3 или 10.1.2.0/24)"; exit 2; }
     grep -qxF "$1" scope.txt || echo "$1" >> scope.txt
     [ -n "$2" ] && echo "$2" > keys/login
-    PR=$(echo "$1" | tr '/' '_'); mkdir -p "projects/$PR"; echo "$PR" > projects/.current
-    [ -f "projects/$PR/README.md" ] || printf '# Проект %s\n\nЦель: проверка версий ПО и настроек сервера %s (только чтение). Начат: %s\n' "$1" "$1" "$(date '+%F %H:%M')" > "projects/$PR/README.md"
-    python3 nadzor.py task "проект $PR: проверка версий ПО на сервере АУЭС $1 (только чтение)"
-    say "Проект: projects/$PR/ — ИИ пишет только сюда."
+    if [ ! -s projects/.current ]; then "$WH/wh" project new "$(echo "$1" | tr '/' '_')" "проверка версий ПО и настроек сервера $1 (только чтение)" >/dev/null; fi
+    say "Проект открыт: $(cat projects/.current). ИИ работает по проектам сам: wh project list / new / use."
     say "Область работ: только $1. Всё остальное программа откажется трогать — и я, и ИИ."
     J "start: $1 добавлен в область${2:+, логин $2}"; echo "область: $(grep -v '^#' scope.txt | tr '\n' ' ')";;
   key)    # wh key — свой ключ SSH (публичную часть отдать админу)
@@ -127,6 +125,7 @@ ART
    4  Проверка версий (дали логин)            d  Готовность (doctor)
    5  Настройки SSH                           s  Схема «как работает» (браузер)
    6  HTTPS                                   o  Открыть отчёт в браузере
+                                              p  Проекты (клятвы)
                                               c  Позвать ИИ-агента (claude)
                                               0  Выход
 M
@@ -142,6 +141,7 @@ M
         8) "$WH/wh" report;;
         o) "$WH/wh" open;;
         9) "$WH/wh" log 25;;
+        p) "$WH/wh" project list;;
         d) "$WH/wh" doctor;;
         s) "$WH/wh" about;;
         c) J "menu: запущен ИИ-агент"; (cd "$WH" && claude);;
@@ -169,6 +169,26 @@ M
     curl -sfL -m 180 -o tools/cache/epss.csv.gz.new https://epss.empiricalsecurity.com/epss_scores-current.csv.gz && mv tools/cache/epss.csv.gz.new tools/cache/epss.csv.gz && echo "EPSS: ok"
     trivy image --download-db-only --quiet && echo "trivy: ok"; grype db update -q && echo "grype: ok"
     nuclei -duc -update-templates -ud tools/cache/nuclei-templates -silent >/dev/null 2>&1 && echo "nuclei: ok"; J "update-db: готово";;
+  project) # wh project new <имя> "<чем занимаюсь>" | use <имя> | list — проекты с клятвой (ИИ ведёт их сам)
+    sub="${1:-list}"; shift
+    case "$sub" in
+      new) n="$1"; g="$2"
+           [[ "$n" =~ ^[A-Za-z0-9._-]{1,40}$ ]] || { echo "имя проекта: латиница, цифры, . _ - (до 40)"; exit 2; }
+           [ -n "$g" ] || { echo 'wh project new <имя> "<чем занимаюсь>"'; exit 2; }
+           [ -d "projects/$n" ] && { echo "проект $n уже есть — открыть: wh project use $n"; exit 3; }
+           mkdir -p "projects/$n"
+           printf '# Проект %s\n\nКлятва: я занимаюсь: %s — и ничем другим\nСоздан: %s\n\n## Ход работы\n' "$n" "$g" "$(date '+%F %H:%M')" > "projects/$n/README.md"
+           echo "$n" > projects/.current; python3 nadzor.py task "проект $n: $g" >/dev/null
+           say "Проект $n создан и открыт. Клятва: я занимаюсь: $g — и ничем другим"; J "project new: $n — $g";;
+      use) n="$1"; [ -d "projects/$n" ] || { echo "нет проекта $n — список: wh project list"; exit 3; }
+           g=$(sed -n 's/^Клятва: я занимаюсь: \(.*\) — и ничем другим$/\1/p' "projects/$n/README.md" | head -n1)
+           echo "$n" > projects/.current; python3 nadzor.py task "проект $n: ${g:-$n}" >/dev/null
+           say "Открыт проект $n. Клятва: ${g:-—}"; J "project use: $n";;
+      list) cur=$(cat projects/.current 2>/dev/null); ls -d projects/*/ >/dev/null 2>&1 || { echo "проектов нет — wh project new <имя> \"<чем занимаюсь>\""; exit 0; }
+           for d in projects/*/; do n=$(basename "$d"); g=$(sed -n 's/^Клятва: //p' "$d/README.md" | head -n1)
+             printf '%s %-26s %s\n' "$([ "$n" = "$cur" ] && echo '▶' || echo ' ')" "$n" "$g"; done;;
+      *) echo 'wh project new <имя> "<чем занимаюсь>" | use <имя> | list';;
+    esac;;
   plan)   # wh plan <IP> — план работ для админа (что делаю / чего не делаю / данные / остановка)
     need "$1"; P="out/ПЛАН_$1_$TS.txt"
     cat > "$P" <<EOP
@@ -217,6 +237,7 @@ wh tls <IP> [порт]      HTTPS (testssl)             wh sshaudit <IP>    на
 wh web <IP>             веб: ответ, сервер, техн.   wh nuclei <IP>      только по отдельному разрешению
 wh code <папка>         разбор кода у себя          wh shell            терминал: каждая команда в журнал
 wh winversions <IP>     Windows-сервер (OpenSSH)    wh doctor           готовность: инструменты, ключ, базы, сеть
+wh project new|use|list проекты с клятвой (ИИ сам)
 wh menu                 ЭКРАН С ПУНКТАМИ (проще всего)   wh open           отчёт в браузере · wh update-db  обновить базы   wh publish        обновить GitHub (делает человек)
 wh outside <IP>         СНАРУЖИ без логина         wh plan <IP>        план работ для админа      wh about            схема «как работает» в браузере
 wh demo                 показ офлайн (сторож, хэши) wh log [N] | undo | verify | report
