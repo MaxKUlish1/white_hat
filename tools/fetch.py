@@ -12,6 +12,7 @@ R = {
  "httpx": ("projectdiscovery/httpx", r"^httpx_[\d.]+_linux_amd64\.zip$"),
  "subfinder": ("projectdiscovery/subfinder", r"^subfinder_[\d.]+_linux_amd64\.zip$"),
  "gitleaks": ("gitleaks/gitleaks", r"^gitleaks_[\d.]+_linux_x64\.tar\.gz$"),
+ "gh": ("cli/cli", r"^gh_[\d.]+_linux_amd64\.tar\.gz$"),
 }
 UA = {"User-Agent": "white-hat-fetch/1.0", "Accept": "application/vnd.github+json"}
 def get(u, raw=False):
@@ -36,7 +37,7 @@ def one(name):
             zipfile.ZipFile(p).extractall(d)
         elif an.endswith(".tar.gz"):
             tarfile.open(p).extractall(d, filter="data") if sys.version_info >= (3, 12) else tarfile.open(p).extractall(d)
-        src = p if not an.endswith((".zip", ".tar.gz")) else os.path.join(d, name)
+        src = p if not an.endswith((".zip", ".tar.gz")) else (os.path.join(d, name) if os.path.exists(os.path.join(d, name)) else os.path.join(d, an[:-7], "bin", name))
         dst = os.path.join(BIN, name); shutil.copy(src, dst); os.chmod(dst, os.stat(dst).st_mode | stat.S_IXUSR)
         return "%-12s %-10s %s (%d МБ) — %s" % (name, rel["tag_name"], an, len(data) >> 20, ok)
     except Exception as e:

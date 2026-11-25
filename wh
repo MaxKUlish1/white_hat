@@ -98,6 +98,60 @@ print(textwrap.fill(x.get("description", ""), 110))'
     [ -n "$B" ] && echo "SSH: $B" || echo "SSH: порт 22 не отвечает"
     printf 'http://%s\nhttps://%s\n' "$1" "$1" | timeout 40 httpx -silent -nc -sc -title -server -td -rl 5 > "out/web_$1_$TS.txt" 2>/dev/null; cat "out/web_$1_$TS.txt"
     python3 check.py --outside "$1" "$B" "out/web_$1_$TS.txt"; J "outside: готово $1";;
+  menu)   # wh menu — экран с пунктами: выбрал цифру — он спросит IP и запустит
+    ask(){ read -r -p "$1" REPLY </dev/tty; echo "$REPLY"; }
+    while true; do
+      clear 2>/dev/null
+      printf '\033[1;32m'
+      cat <<'ART'
+ ╔════════════════════════════════════════════════════════════════╗
+ ║   W H I T E _ H A T      проверка серверов только чтением       ║
+ ║   версии ПО · настройки · уязвимости (офлайн) · отчёт админу   ║
+ ║   ИИ под надзором: сторож до каждого действия · журнал SHA-256 ║
+ ╚════════════════════════════════════════════════════════════════╝
+ART
+      printf '\033[0m\n'
+      echo "  область: $(grep -v '^#' scope.txt | tr '\n' ' ' | sed 's/^ *$/— пусто —/')   задача: $(cat task.txt 2>/dev/null || echo '—')"
+      echo "  журнал: $(python3 nadzor.py verify 2>&1 | tail -n1 | cut -c1-90)"
+      cat <<'M'
+
+   1  Начать: IP от админа в область          7  Что за уязвимость (CVE)
+   2  План работ для админа                   8  Итог + хэш журнала
+   3  Проверка СНАРУЖИ, без логина            9  Журнал (последние записи)
+   4  Проверка версий (дали логин)            d  Готовность (doctor)
+   5  Настройки SSH                           s  Схема «как работает» (браузер)
+   6  HTTPS                                   c  Позвать ИИ-агента (claude)
+                                              0  Выход
+M
+      k=$(ask "  выбор: ")
+      case "$k" in
+        1) ip=$(ask "  IP: "); lg=$(ask "  логин (Enter — нет): "); "$WH/wh" start "$ip" $lg;;
+        2) "$WH/wh" plan "$(ask '  IP: ')";;
+        3) "$WH/wh" outside "$(ask '  IP: ')";;
+        4) ip=$(ask "  IP: "); lg=$(ask "  логин: "); "$WH/wh" fp "$ip"; echo; ok=$(ask "  отпечаток сверили с админом? (да/нет) "); [ "$ok" = "да" ] && "$WH/wh" versions "$ip" "$lg";;
+        5) "$WH/wh" sshaudit "$(ask '  IP: ')";;
+        6) "$WH/wh" tls "$(ask '  IP: ')";;
+        7) "$WH/wh" cve "$(ask '  CVE (например CVE-2023-48795): ')";;
+        8) "$WH/wh" report;;
+        9) "$WH/wh" log 25;;
+        d) "$WH/wh" doctor;;
+        s) "$WH/wh" about;;
+        c) J "menu: запущен ИИ-агент"; (cd "$WH" && claude);;
+        0|q) break;;
+      esac
+      ask $'\n  Enter — назад в меню ' >/dev/null
+    done;;
+  publish) # wh publish [--dry] — обновить публичную копию на GitHub: только код и описание, с проверкой на утечки
+    F="README.md wh guard.py nadzor.py check.py jlog.py version.sh version.ps1 env.sh tools/fetch.py tools/whrc .claude/settings.json about.html ПАМЯТКА.md demo/README.md пример_отчёта.md пример_выгрузки.txt .gitignore"
+    export GIT_INDEX_FILE="$WH/.git/index_public"; git read-tree public && git add $F && TREE=$(git write-tree)
+    BAD=$(git grep -n -I -E "192[.]168[.]|nod[e]2|BEGIN [A-Z ]*PRIVAT[E] KEY|ssh-(ed25519|rsa) AAA[A]|gh[pousr]_[A-Za-z0-9]{30}|[A-Za-z0-9._-]+@gmai[l][.]com" $TREE -- . 2>/dev/null | head -n 5)
+    if [ -n "$BAD" ]; then unset GIT_INDEX_FILE; echo "СТОП: похоже на личные данные, не публикую:"; echo "$BAD"; exit 4; fi
+    if [ "$(git rev-parse public^{tree})" = "$TREE" ]; then unset GIT_INDEX_FILE; echo "публичная копия уже актуальна"; exit 0; fi
+    C=$(git commit-tree "$TREE" -p public -m "обновление $(date '+%F %H:%M')"); unset GIT_INDEX_FILE
+    git update-ref refs/heads/public "$C"; echo "ветка public обновлена: $(git diff --stat public~1 public | tail -n1)"
+    [ "$1" = "--dry" ] && { echo "(--dry: на GitHub не отправлено)"; exit 0; }
+    git push https://github.com/MaxKUlish1/white_hat.git public:main && J "publish: GitHub обновлён"
+    echo "https://github.com/MaxKUlish1/white_hat";;
   plan)   # wh plan <IP> — план работ для админа (что делаю / чего не делаю / данные / остановка)
     need "$1"; P="out/ПЛАН_$1_$TS.txt"
     cat > "$P" <<EOP
@@ -146,6 +200,7 @@ wh tls <IP> [порт]      HTTPS (testssl)             wh sshaudit <IP>    на
 wh web <IP>             веб: ответ, сервер, техн.   wh nuclei <IP>      только по отдельному разрешению
 wh code <папка>         разбор кода у себя          wh shell            терминал: каждая команда в журнал
 wh winversions <IP>     Windows-сервер (OpenSSH)    wh doctor           готовность: инструменты, ключ, базы, сеть
+wh menu                 ЭКРАН С ПУНКТАМИ (проще всего)   wh publish        обновить GitHub (делает человек)
 wh outside <IP>         СНАРУЖИ без логина         wh plan <IP>        план работ для админа      wh about            схема «как работает» в браузере
 wh demo                 показ офлайн (сторож, хэши) wh log [N] | undo | verify | report
 EOF

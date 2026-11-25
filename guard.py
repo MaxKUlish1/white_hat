@@ -21,7 +21,7 @@ FORBID = [
     (r"\brm\b[^|;&]*\s-[a-zA-Z]*[rR]|\brm\s+--recursive|\bfind\b[^|;&]*-delete|\bshred\b|\bmkfs|\bdd\b[^|;&]*of=", "удаление/затирание"),
     (r"\b(mysqldump|pg_dump|pg_dumpall|mongodump)\b", "выгрузка баз данных"),
     (r"/dev/(tcp|udp)/|\bpython[0-9.]*\s+-c\b|\bperl\s+-e\b|\bruby\s+-e\b|\bnode\s+-e\b|\b(ba|z|da)?sh\s+-c\b|\beval\b|\bbase64\s+(-d|--decode)\b|\bxxd\s+-r\b", "обход сторожа (сокеты/eval/скрытый код)"),
-    (r"(^|[\s;&|])(\./)?wh\s+(start|nuclei|key|ssh|shell|undo)\b", "это решает только человек (wh start/nuclei/key/ssh/shell/undo)"),
+    (r"(^|[\s;&|])(\./)?wh\s+(start|nuclei|key|ssh|shell|undo|publish)\b", "это решает только человек (wh start/nuclei/key/ssh/shell/undo/publish)"),
     (r"keys/(?!wh_ed25519\.pub\b)|wh_ed25519(?!\.pub)|\bkeys/\*|id_(rsa|ed25519|ecdsa)\b|\.ssh/", "ключи — только человеку"),
     (r"\b(curl|wget)\b[^|;&]*\s(-d|--data\S*|-F|--form|-T|--upload-file|-X\s*(POST|PUT|PATCH|DELETE))\b", "отправка данных наружу"),
 ]
