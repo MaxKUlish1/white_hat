@@ -18,7 +18,10 @@ case "$CMD" in
     python3 -c "import ipaddress,sys; n=ipaddress.ip_network(sys.argv[1],strict=False); sys.exit(0 if n.prefixlen>=24 else 1)" "$1" 2>/dev/null || { echo "СТОП: нужен IP или подсеть не шире /24 (например 10.1.2.3 или 10.1.2.0/24)"; exit 2; }
     grep -qxF "$1" scope.txt || echo "$1" >> scope.txt
     [ -n "$2" ] && echo "$2" > keys/login
-    python3 nadzor.py task "проверка версий ПО на сервере АУЭС $1 (только чтение)"
+    PR=$(echo "$1" | tr '/' '_'); mkdir -p "projects/$PR"; echo "$PR" > projects/.current
+    [ -f "projects/$PR/README.md" ] || printf '# Проект %s\n\nЦель: проверка версий ПО и настроек сервера %s (только чтение). Начат: %s\n' "$1" "$1" "$(date '+%F %H:%M')" > "projects/$PR/README.md"
+    python3 nadzor.py task "проект $PR: проверка версий ПО на сервере АУЭС $1 (только чтение)"
+    say "Проект: projects/$PR/ — ИИ пишет только сюда."
     say "Область работ: только $1. Всё остальное программа откажется трогать — и я, и ИИ."
     J "start: $1 добавлен в область${2:+, логин $2}"; echo "область: $(grep -v '^#' scope.txt | tr '\n' ' ')";;
   key)    # wh key — свой ключ SSH (публичную часть отдать админу)
@@ -79,7 +82,8 @@ print(textwrap.fill(x.get("description", ""), 110))'
     for t in osv-scanner trivy grype syft semgrep gitleaks testssl.sh ssh-audit httpx nuclei subfinder; do command -v $t >/dev/null && ok "$t" "есть" || ok "$t" "НЕТ"; done
     [ -f "$KEY.pub" ] && ok "ключ SSH" "$(ssh-keygen -lf "$KEY.pub" | cut -d' ' -f2)" || ok "ключ SSH" "нет (wh key)"
     ok "область scope.txt" "$(grep -v '^#' scope.txt | tr '\n' ' ' | sed 's/^$/пусто (wh start IP)/')"
-    ok "задача" "$(cat task.txt 2>/dev/null || echo 'не объявлена (wh start IP)')"
+    ok "задача (клятва)" "$(cat task.txt 2>/dev/null || echo 'нет — ИИ только читает; дать: wh start IP')"
+    ok "текущий проект" "$(cat projects/.current 2>/dev/null || echo 'нет')"
     ok "база trivy / grype / nuclei" "$(du -sh tools/cache/trivy tools/cache/grype tools/cache/nuclei-templates 2>/dev/null | awk '{print $1}' | tr '\n' ' ')"
     ok "интернет (OSV)" "$(curl -s -m 6 -o /dev/null -w '%{http_code}' https://api.osv.dev/v1/vulns/DSA-5000-1 | sed 's/200/есть/;s/000/НЕТ — сверка дома/')"
     ok "надзор ИИ (хуки)" "$(grep -c guard.py .claude/settings.json) сторож, $(grep -c nadzor.py .claude/settings.json) капсулы"

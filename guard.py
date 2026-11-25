@@ -9,7 +9,7 @@ import jlog
 SCOPE = os.path.join(HERE, "scope.txt")
 SERVICES = {"api.osv.dev", "nvd.nist.gov", "github.com", "osv.dev", "security-tracker.debian.org", "ubuntu.com"}
 PROTECTED = {"guard.py", "nadzor.py", "check.py", "jlog.py", "wh", "env.sh", "version.sh", "version.ps1", "scope.txt",
-             "journal.tsv", "task.txt", ".claude", "keys", ".git", ".gitignore"}
+             "journal.tsv", "task.txt", ".claude", "keys", ".git", ".gitignore", ".current"}
 NET = r"\b(ssh|scp|sftp|rsync|curl|wget|nc|ncat|socat|telnet|ping|ftp|psql|mysql|nuclei|httpx|subfinder|testssl\.sh|testssl|ssh-audit|ssh-keyscan|git\s+(push|clone|fetch|pull))\b"
 WH_NET = r"^\s*(\./)?wh\s+(versions|winversions|fp|tls|web|sshaudit|outside)\s+(\S+)(\s+[\w.-]+)?\s*$"
 FORBID = [
@@ -64,6 +64,8 @@ def inside(ap):
 def protected(ap):
     if not inside(ap):
         return False
+    if ap == os.path.join(HERE, "projects", ".current"):
+        return True
     rel = os.path.relpath(ap, HERE).split(os.sep)[0]
     return rel in PROTECTED
 
@@ -98,8 +100,28 @@ def check_bash(cmd, cwd):
     return None
 
 
+TASK = os.path.join(HERE, "task.txt")
+CUR = os.path.join(HERE, "projects", ".current")
+READ_ONLY_BASH = r"^\s*((cat|less|head|tail|ls|grep|wc|file|stat|pwd|echo)\b[^>|;&]*|(\./)?wh\s+(log|verify|doctor|help|cve)\b.*)$"
+
+
+def current_project():
+    if os.path.exists(CUR):
+        name = open(CUR, encoding="utf-8").read().strip()
+        if name:
+            return os.path.join(HERE, "projects", name)
+    return None
+
+
 def decide(ev):
     tool, inp, cwd = ev.get("tool_name", "?"), ev.get("tool_input") or {}, ev.get("cwd") or HERE
+    oath = os.path.exists(TASK) and current_project()
+    if not oath:
+        cmd = inp.get("command", "") if tool == "Bash" else ""
+        if tool in ("Read", "Glob", "Grep") or (tool == "Bash" and re.match(READ_ONLY_BASH, cmd)):
+            pass
+        else:
+            return (cmd or tool), "нет клятвы: сначала человек объявляет задачу и проект — wh start <IP>"
     if tool == "Bash":
         text = inp.get("command", "")
         return text, check_bash(text, cwd)
@@ -112,6 +134,9 @@ def decide(ev):
         if tool in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
             if not inside(ap):
                 return text, "запись вне папки проекта: " + ap
+            pr = current_project()
+            if pr and not (ap.startswith(pr + os.sep) or ap.startswith(os.path.join(HERE, "out") + os.sep)):
+                return text, "запись только в текущий проект %s/ (или out/)" % os.path.relpath(pr, HERE)
             if protected(ap):
                 return text, "защищённый файл надзора: " + os.path.relpath(ap, HERE)
     if inp.get("url"):
