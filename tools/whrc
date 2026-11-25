@@ -1,0 +1,6 @@
+[ -f ~/.bashrc ] && source ~/.bashrc
+WH="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; source "$WH/env.sh"; cd "$WH"
+export PATH="$WH:$PATH"; PS1='\[\e[1;31m\][надзор white_hat]\[\e[0m\] \w$ '
+__wh_last=""; __wh_log() { local c; c=$(HISTTIMEFORMAT= history 1 | sed 's/^ *[0-9]* *//'); [ -n "$c" ] && [ "$c" != "$__wh_last" ] && python3 "$WH/nadzor.py" human "ввёл: $c"; __wh_last="$c"; }
+PROMPT_COMMAND="__wh_log"
+echo "Терминал под надзором: каждая команда пишется в журнал. Подсказка: wh"

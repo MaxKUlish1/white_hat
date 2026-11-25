@@ -1,0 +1,13 @@
+__pycache__/
+journal.tsv
+keys/
+logs/
+out/
+report_*.md
+task.txt
+tools/bin/
+tools/cache/
+tools/dl/
+tools/testssl/
+tools/venv/
+журнал_тест*.tsv

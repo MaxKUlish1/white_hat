@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>white_hat — проверка серверов без вмешательства</title>
+<style>
+:root{--bg:#0f1317;--panel:#171d23;--line:#2a343e;--tx:#e4e9ee;--mut:#97a4b1;--ac:#6cc3a0;--warn:#e0a458;--bad:#e07a7a}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--tx);font:19px/1.6 system-ui,"Segoe UI",Roboto,sans-serif}
+main{max-width:1000px;margin:0 auto;padding:0 20px 80px}
+header{padding:64px 0 24px}
+h1{font-size:2.1rem;line-height:1.25;margin:0 0 16px}
+h2{font-size:1.5rem;margin:0 0 16px;color:var(--ac)}
+.lead{font-size:1.2rem;color:var(--mut);margin:0}
+section{padding:32px 0;border-top:1px solid var(--line);opacity:0;transform:translateY(16px);transition:opacity .6s,transform .6s}
+section.in,header{opacity:1;transform:none}
+.noanim section{opacity:1;transform:none}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:16px 20px}
+.card h3{margin:0 0 8px;font-size:1.1rem}
+.yes h3{color:var(--ac)}.no h3{color:var(--bad)}
+ul{margin:0;padding-left:1.2em}li{margin:4px 0}
+table{border-collapse:collapse;width:100%;font-size:.88rem;background:var(--panel)}
+th,td{border:1px solid var(--line);padding:6px 10px;text-align:left;vertical-align:top}
+th{color:var(--mut);font-weight:600}
+code,.h{font-family:ui-monospace,Consolas,monospace}
+code{background:#222b33;padding:1px 6px;border-radius:4px;font-size:.9em}
+.h{color:var(--warn)}
+.bad{color:var(--bad);font-weight:600}
+svg{width:100%;height:auto;background:var(--panel);border:1px solid var(--line);border-radius:8px}
+svg text{fill:var(--tx);font:14px system-ui,sans-serif}
+svg .m{fill:var(--mut);font-size:12.5px}
+.tl{list-style:none;padding:0;margin:0;border-left:2px solid var(--line)}
+.tl li{position:relative;padding:6px 0 14px 24px}
+.tl li:before{content:"";position:absolute;left:-7px;top:13px;width:12px;height:12px;border-radius:50%;background:var(--ac)}
+.note{color:var(--mut);font-size:.9rem;margin-top:10px}
+footer{color:var(--mut);font-size:.85rem;padding-top:24px;border-top:1px solid var(--line)}
+@media(max-width:700px){.cols{grid-template-columns:1fr}body{font-size:17px}}
+@media(prefers-reduced-motion:reduce){section{transition:none;opacity:1;transform:none}}
+</style>
+</head>
+<body>
+<main>
+<header>
+<h1>white_hat — проверка серверов без вмешательства</h1>
+<p class="lead">Снимаю версии ПО и настройки только чтением, сверяю у себя с открытой базой уязвимостей, каждое действие — в журнале с цепочкой хэшей.</p>
+</header>
+
+<section>
+<h2>Как это устроено</h2>
+<svg viewBox="0 0 960 400" role="img" aria-label="Схема: ноутбук по SSH читает сервер, сверка у себя, отчёт">
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#6cc3a0"/></marker></defs>
+<rect x="20" y="20" width="460" height="190" rx="10" fill="none" stroke="#e0a458" stroke-dasharray="6 5"/>
+<text x="34" y="44" style="fill:#e0a458;font-weight:600">Надзор: сторож до каждого действия ИИ · журнал SHA-256 · откат</text>
+<rect x="50" y="85" width="190" height="90" rx="8" fill="#1f2a33" stroke="#6cc3a0"/>
+<text x="145" y="125" text-anchor="middle">Ноутбук</text><text x="145" y="147" text-anchor="middle">white_hat</text>
+<rect x="640" y="85" width="270" height="90" rx="8" fill="#1f2a33" stroke="#97a4b1"/>
+<text x="775" y="125" text-anchor="middle">Ваш сервер в DMZ</text><text x="775" y="147" text-anchor="middle" class="m">ничего не устанавливается</text>
+<line x1="240" y1="108" x2="638" y2="108" stroke="#6cc3a0" stroke-width="2" marker-end="url(#a)"/>
+<text x="440" y="98" text-anchor="middle" class="m">SSH, только чтение</text>
+<line x1="638" y1="152" x2="242" y2="152" stroke="#6cc3a0" stroke-width="2" marker-end="url(#a)"/>
+<text x="440" y="172" text-anchor="middle" class="m">список пакетов и настроек (текст)</text>
+<line x1="145" y1="212" x2="145" y2="268" stroke="#6cc3a0" stroke-width="2" marker-end="url(#a)"/>
+<rect x="50" y="270" width="330" height="90" rx="8" fill="#1f2a33" stroke="#6cc3a0"/>
+<text x="215" y="308" text-anchor="middle">Сверка у себя</text><text x="215" y="330" text-anchor="middle" class="m">OSV.dev / trivy / grype</text>
+<line x1="380" y1="315" x2="538" y2="315" stroke="#6cc3a0" stroke-width="2" marker-end="url(#a)"/>
+<rect x="540" y="255" width="370" height="120" rx="8" fill="#1f2a33" stroke="#6cc3a0"/>
+<text x="725" y="300" text-anchor="middle">Отчёт</text><text x="725" y="324" text-anchor="middle" class="m">что обновить и до какой версии</text><text x="725" y="344" text-anchor="middle" class="m">+ гигиена настроек</text>
+</svg>
+<p class="note">На сервер уходит только скрипт чтения (<code>version.sh</code>); файлов на сервере он не оставляет.</p>
+</section>
+
+<section>
+<h2>Что делаю и чего не делаю</h2>
+<div class="cols">
+<div class="card yes"><h3>Что делаю</h3><ul>
+<li>Снимаю список установленных пакетов и их версий.</li>
+<li>Читаю ключевые настройки: SSH (root, пароли), автообновления, перезагрузка, учётки, фаервол.</li>
+<li>Сверяю версии у себя с открытой базой уязвимостей.</li>
+<li>Выдаю отчёт: что обновить и до какой версии.</li></ul></div>
+<div class="card no"><h3>Чего не делаю</h3><ul>
+<li>Не сканирую порты.</li>
+<li>Не подбираю пароли.</li>
+<li>Не создаю нагрузку (DoS).</li>
+<li>Ничего не устанавливаю и не меняю на вашем сервере.</li>
+<li>Не копирую базы данных и персональные данные.</li>
+<li>Не оставляю файлов на сервере.</li></ul></div>
+</div>
+</section>
+
+<section>
+<h2>Как устроен контроль ИИ</h2>
+<div class="cols">
+<div class="card"><h3>Сторож</h3>
+<p>Проверяет каждое действие ИИ до выполнения. Адреса — только из <code>scope.txt</code> (ваши IP). Запрещено всегда: sudo, управление службами, установка ПО, сканеры, запись вне папки проекта, чтение ключей. Любая ошибка сторожа — запрет.</p></div>
+<div class="card"><h3>Капсула и откат</h3>
+<p>После каждого действия записывается «делал → получил» и делается автокоммит в git. Откат — <code>wh undo</code>.</p></div>
+</div>
+<h3 style="margin:24px 0 8px">Журнал — цепочка хэшей</h3>
+<p>Каждая строка содержит хэш предыдущей. Схематичный пример (значения сокращены):</p>
+<table>
+<tr><th>#</th><th>событие</th><th>prev</th><th>хэш строки</th></tr>
+<tr><td>1</td><td>клятва: область и цель</td><td class="h">0000…0000</td><td class="h">091c…9541c4</td></tr>
+<tr><td>2</td><td>команда ИИ: разрешено</td><td class="h">091c…9541c4</td><td class="h">5a3b…07414</td></tr>
+<tr><td>3</td><td>капсула: делал → получил</td><td class="h">5a3b…07414</td><td class="h">c7e2…41ab</td></tr>
+</table>
+<p style="margin-top:12px">Любая правка задним числом видна: <code>wh verify</code> → <span class="bad">ЦЕПОЧКА НАРУШЕНА</span>. Итоговый хэш журнала передаётся вам вместе с отчётом.</p>
+</section>
+
+<section>
+<h2>Пример результата</h2>
+<p>Реальный прогон на моём сервере (Debian 12, база OSV.dev): <b>775</b> пакетов в выгрузке; <b>16</b> записей, где обновление закрывает известные уязвимости; ещё <b>169</b> пакетов с уязвимостями без выпущенного исправления — за ними нужно следить. Только чтение, сервер не сканировался, нагрузки не было.</p>
+<table>
+<tr><th>пакет</th><th>установлено</th><th>исправлено в</th><th>уязвимостей</th></tr>
+<tr><td>linux</td><td>6.1.187-1</td><td>6.1.192-2</td><td>2310</td></tr>
+<tr><td>tzdata</td><td>2026b-0+deb12u1</td><td>2026f-0+deb12u1</td><td>3</td></tr>
+<tr><td>linux</td><td>6.1.190-1</td><td>6.1.192-2</td><td>1271</td></tr>
+<tr><td>pcre2</td><td>10.42-1</td><td>10.42-1+deb12u2</td><td>9</td></tr>
+<tr><td>rsync</td><td>3.2.7-1+deb12u6</td><td>3.5.0+ds1-0+deb12u1</td><td>35</td></tr>
+</table>
+<p class="note">Первые 5 из 16 строк реального отчёта (сервер Debian 12, 775 пакетов).</p>
+<p><b>Гигиена настроек</b> (проверяется отдельно, по выгрузке): вход root и пароли в SSH, нужна ли перезагрузка, автообновления, учётки с входом и UID 0, фаервол.</p>
+</section>
+
+<section>
+<h2>Мой опыт</h2>
+<div class="card">
+<p><b>GHSA-55x6-pm4p-68xc</b> (HIGH) — <code>bscott/subtrackr</code>. Ссылка сброса пароля собиралась из заголовков запроса (Host / X-Forwarded-*): подмена заголовка приводила к письму со ссылкой на домен атакующего и утечке токена сброса.</p>
+<p>Найдено ручным разбором кода, подтверждено автором, исправлено в v0.6.11, указан автор находки.</p>
+<p>Сканеры на уязвимой версии (trivy, semgrep, gitleaks) эту уязвимость не нашли — они дают фон, а логику проверяет разбор кода.</p>
+</div>
+</section>
+
+<section>
+<h2>Порядок работы</h2>
+<ol class="tl">
+<li><b>Согласование области и окна.</b> Вы называете IP; они записываются в <code>scope.txt</code>.</li>
+<li><b>Ключ SSH и сверка отпечатка.</b> Вы получаете мой публичный ключ; отпечаток ключа сервера сверяем до входа.</li>
+<li><b>Сбор</b> — около 1 минуты, только чтение.</li>
+<li><b>Сверка</b> — около 1 минуты, у меня, по открытой базе.</li>
+<li><b>Отчёт</b> и итоговый хэш журнала — вам.</li>
+</ol>
+</section>
+<footer>white_hat · страница работает офлайн, без внешних ресурсов.</footer>
+</main>
+<script>
+(function(){var s=document.querySelectorAll('section');
+if(!('IntersectionObserver' in window)){document.body.className='noanim';return}
+var o=new IntersectionObserver(function(e){e.forEach(function(x){if(x.isIntersecting){x.target.classList.add('in');o.unobserve(x.target)}})},{threshold:.1});
+s.forEach(function(x){o.observe(x)})})();
+</script>
+</body>
+</html>

@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+# wh — пульт white_hat. Каждое действие пишется в журнал (цепочка хэшей) и коммитится.
+# Сеть — только адреса из scope.txt. Ничего не ставит на чужие серверы, только чтение.
+WH="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+source "$WH/env.sh"
+cd "$WH" || exit 1
+KEY="$WH/keys/wh_ed25519"; KH="$WH/keys/known_hosts"; TS=$(date +%F_%H%M)
+J()   { python3 "$WH/nadzor.py" human "$*"; }
+say() { printf "\n\033[1;36m▶ %s\033[0m\n" "$*"; }
+need(){ [ -n "$1" ] || { echo "нужен IP: wh $CMD <IP>"; exit 2; }
+        python3 "$WH/guard.py" inscope "$1" || { echo "СТОП: $1 нет в scope.txt (добавь: wh start $1)"; J "отказ: $CMD $1 — вне области"; exit 3; }; }
+SSHO=(-o UserKnownHostsFile="$KH" -o StrictHostKeyChecking=ask -o ConnectTimeout=10 -o PreferredAuthentications=publickey,keyboard-interactive,password)
+[ -f "$KEY" ] && SSHO=(-i "$KEY" "${SSHO[@]}")
+CMD="${1:-help}"; shift
+case "$CMD" in
+  start)  # wh start <IP> [логин] — область + клятва
+    [ -n "$1" ] || { echo "wh start <IP>"; exit 2; }
+    python3 -c "import ipaddress,sys; n=ipaddress.ip_network(sys.argv[1],strict=False); sys.exit(0 if n.prefixlen>=24 else 1)" "$1" 2>/dev/null || { echo "СТОП: нужен IP или подсеть не шире /24 (например 10.1.2.3 или 10.1.2.0/24)"; exit 2; }
+    grep -qxF "$1" scope.txt || echo "$1" >> scope.txt
+    [ -n "$2" ] && echo "$2" > keys/login
+    python3 nadzor.py task "проверка версий ПО на сервере АУЭС $1 (только чтение)"
+    say "Область работ: только $1. Всё остальное программа откажется трогать — и я, и ИИ."
+    J "start: $1 добавлен в область${2:+, логин $2}"; echo "область: $(grep -v '^#' scope.txt | tr '\n' ' ')";;
+  key)    # wh key — свой ключ SSH (публичную часть отдать админу)
+    [ -f "$KEY" ] || ssh-keygen -q -t ed25519 -N "" -C "white_hat@$(hostname)-$(date +%F)" -f "$KEY"
+    echo "ПУБЛИЧНЫЙ ключ (отдать админу для authorized_keys):"; cat "$KEY.pub"; ssh-keygen -lf "$KEY.pub"
+    J "key: показан публичный ключ $(ssh-keygen -lf "$KEY.pub" | cut -d' ' -f2)";;
+  fp)     # wh fp <IP> — отпечаток ключа сервера (сверить с админом ДО входа)
+    need "$1"; say "Снимаю отпечаток ключа сервера $1. Сверьте со своим — так исключаем подмену сервера. Вход не выполняется."
+    ssh-keyscan -T 5 "$1" 2>/dev/null | tee "out/hostkeys_$1.txt" | ssh-keygen -lf - | tee "out/fingerprint_$1.txt"
+    J "fp: отпечатки ключей сервера $1 сняты";;
+  ssh)    # wh ssh <IP> [логин] — вход, сессия записывается
+    need "$1"; L="${2:-$(cat keys/login 2>/dev/null)}"; [ -n "$L" ] || { echo "wh ssh <IP> <логин>"; exit 2; }
+    J "ssh: вход $L@$1"; script -q -f -c "$(printf "%q " ssh "${SSHO[@]}" "$L@$1")" "logs/ssh_$1_$TS.log"
+    python3 nadzor.py add "logs/ssh_$1_$TS.log" "лог ssh-сессии $1";;
+  versions) # wh versions <IP> [логин] — снять версии (только чтение) и сверить
+    need "$1"; L="${2:-$(cat keys/login 2>/dev/null)}"; [ -n "$L" ] || { echo "wh versions <IP> <логин>"; exit 2; }
+    F="out/versions_$1_$TS.txt"; J "versions: сбор версий $L@$1 (version.sh, только чтение)"
+    say "Шаг 1/2: снимаю с $1 список установленных пакетов и настроек. Только чтение, на сервере ничего не создаётся."
+    ssh "${SSHO[@]}" "$L@$1" 'sh -s' < version.sh > "$F" && echo "получено: $F ($(wc -l < "$F") строк)" && say "Шаг 2/2: сверяю версии с открытой базой уязвимостей у себя на ноутбуке. Сервер не трогаю." && python3 check.py "$F"
+    J "versions: готово $1";;
+  cve)    # wh cve <CVE-ID> — что это за уязвимость (офлайн, локальная база grype)
+    [ -n "$1" ] || { echo "wh cve CVE-2023-48795"; exit 2; }
+    grype db search vuln "$1" -o json 2>/dev/null | python3 -c '
+import sys, json, textwrap
+d = json.load(sys.stdin); d = d if isinstance(d, list) else d.get("vulnerabilities", [d])
+if not d: print("нет в локальной базе"); sys.exit()
+x = d[0]; sev = [s for s in (x.get("severities") or []) if isinstance(s, dict)]
+print(x.get("id"), "| опубликовано:", (x.get("published_date") or x.get("published") or "?")[:10])
+for s in sev[:2]:
+    v = s.get("value") or {}; print("  оценка:", s.get("scheme", ""), v.get("base_score", ""), v.get("vector", "") if isinstance(v, dict) else v)
+print(textwrap.fill(x.get("description", ""), 110))'
+    J "cve: $1";;
+  check)  if [ "$1" = "--offline" ]; then python3 check.py --offline "$2"; else python3 check.py "$1"; fi; J "check: $*";;
+  tls)    # wh tls <IP> [порт] — HTTPS: протоколы, шифры, сертификат
+    need "$1"; say "Проверяю HTTPS на $1: протоколы, шифры, сертификат. Обычные подключения, без атак."; J "tls: testssl $1:${2:-443}"; testssl.sh --quiet --color 0 --warnings off --logfile "out/tls_$1_$TS.log" "$1:${2:-443}"; J "tls: готово $1";;
+  sshaudit) need "$1"; say "Проверяю настройки SSH на $1: только рукопожатие, без входа и без подбора паролей."; J "sshaudit: $1"; ssh-audit -n "$1" | tee "out/sshaudit_$1_$TS.txt"; J "sshaudit: готово $1";;
+  web)    # wh web <IP> — что за веб: код ответа, заголовок, сервер, технологии (по 1 запросу)
+    need "$1"; say "Смотрю, что за веб на $1: по одному запросу на http и https."; J "web: httpx $1"; printf 'http://%s\nhttps://%s\n' "$1" "$1" | httpx -silent -nc -sc -title -server -td -rl 5 | tee "out/web_$1_$TS.txt"; J "web: готово $1";;
+  nuclei) # wh nuclei <IP> — ТОЛЬКО по отдельному разрешению: без dos/fuzz/intrusive, 10 запросов/с
+    need "$1"; read -r -p "Есть отдельное разрешение админа на nuclei по $1? (да/нет) " a </dev/tty; [ "$a" = "да" ] || exit 0
+    J "nuclei: $1 (безопасный режим)"; nuclei -duc -silent -nc -t tools/cache/nuclei-templates -etags dos,fuzz,intrusive -rl 10 -c 5 -severity low,medium,high,critical -u "https://$1" -o "out/nuclei_$1_$TS.txt"; J "nuclei: готово $1";;
+  code)   # wh code <папка> — разбор кода у себя: semgrep + gitleaks + trivy
+    [ -d "$1" ] || { echo "wh code <папка с кодом>"; exit 2; }; N=$(basename "$1"); J "code: разбор $1"
+    semgrep scan --config auto --metrics off --quiet --json -o "out/semgrep_$N.json" "$1" >/dev/null 2>&1; echo "semgrep: $(python3 -c "import json;print(len(json.load(open('out/semgrep_$N.json'))['results']))") находок"
+    gitleaks dir "$1" --no-banner --redact -r "out/gitleaks_$N.json" 2>&1 | tail -n 1
+    trivy fs --quiet --scanners vuln,secret,misconfig "$1" | tee "out/trivy_$N.txt" | grep -E "Total:" ; J "code: готово $1";;
+  shell)  # wh shell — терминал, где КАЖДАЯ твоя команда пишется в журнал, сессия записывается
+    J "shell: открыт терминал под надзором"; script -q -f -c "bash --rcfile $WH/tools/whrc" "logs/shell_$TS.log"
+    python3 nadzor.py add "logs/shell_$TS.log" "лог терминала";;
+  winversions) # wh winversions <IP> [логин] — Windows-сервер с OpenSSH: версии ПО (только чтение)
+    need "$1"; L="${2:-$(cat keys/login 2>/dev/null)}"; [ -n "$L" ] || { echo "wh winversions <IP> <логин>"; exit 2; }
+    F="out/versions_win_$1_$TS.txt"; J "winversions: сбор ПО Windows $L@$1 (только чтение)"
+    ssh "${SSHO[@]}" "$L@$1" "powershell -NoProfile -Command -" < version.ps1 > /dev/null
+    ssh "${SSHO[@]}" "$L@$1" "powershell -NoProfile -Command \"Get-Content (Get-ChildItem versions_*.txt | Sort-Object LastWriteTime | Select-Object -Last 1)\"" > "$F" && python3 check.py "$F"
+    J "winversions: готово $1 (на сервере остался файл versions_*.txt в домашней папке — сказать админу)";;
+  doctor) # wh doctor — готовность: инструменты, ключ, базы, интернет, журнал
+    ok(){ printf '  %-34s %s\n' "$1" "$2"; }
+    for t in osv-scanner trivy grype syft semgrep gitleaks testssl.sh ssh-audit httpx nuclei subfinder; do command -v $t >/dev/null && ok "$t" "есть" || ok "$t" "НЕТ"; done
+    [ -f "$KEY.pub" ] && ok "ключ SSH" "$(ssh-keygen -lf "$KEY.pub" | cut -d' ' -f2)" || ok "ключ SSH" "нет (wh key)"
+    ok "область scope.txt" "$(grep -v '^#' scope.txt | tr '\n' ' ' | sed 's/^$/пусто (wh start IP)/')"
+    ok "задача" "$(cat task.txt 2>/dev/null || echo 'не объявлена (wh start IP)')"
+    ok "база trivy / grype / nuclei" "$(du -sh tools/cache/trivy tools/cache/grype tools/cache/nuclei-templates 2>/dev/null | awk '{print $1}' | tr '\n' ' ')"
+    ok "интернет (OSV)" "$(curl -s -m 6 -o /dev/null -w '%{http_code}' https://api.osv.dev/v1/vulns/DSA-5000-1 | sed 's/200/есть/;s/000/НЕТ — сверка дома/')"
+    ok "надзор ИИ (хуки)" "$(grep -c guard.py .claude/settings.json) сторож, $(grep -c nadzor.py .claude/settings.json) капсулы"
+    ok "журнал" "$(python3 nadzor.py verify 2>&1 | tail -n1)";;
+  demo)   # wh demo — показ офлайн: сторож, капсулы, цепочка хэшей (отдельный демо-журнал)
+    export WH_JOURNAL="$WH/out/demo_journal.tsv"; rm -f "$WH_JOURNAL"
+    echo "1) Сторож ИИ решает ДО выполнения:"
+    for c in '{"tool_name":"Bash","tool_input":{"command":"nmap -sV 10.0.0.0/24"}}' '{"tool_name":"Bash","tool_input":{"command":"ssh admin@8.8.8.8 uname -a"}}' '{"tool_name":"Bash","tool_input":{"command":"sudo systemctl restart nginx"}}' '{"tool_name":"Write","tool_input":{"file_path":"/etc/ssh/sshd_config"}}' '{"tool_name":"Bash","tool_input":{"command":"python3 check.py пример_выгрузки.txt"}}'; do
+      r=$(echo "$c" | python3 guard.py); printf '   %-62s -> %s\n' "$(echo "$c" | python3 -c 'import sys,json;d=json.load(sys.stdin);i=d["tool_input"];print(d["tool_name"],i.get("command") or i.get("file_path"))')" "$( [ -n "$r" ] && echo "$r" | python3 -c 'import sys,json;print("ЗАПРЕТ:",json.load(sys.stdin)["hookSpecificOutput"]["permissionDecisionReason"].split(": ",1)[1])' || echo разрешено)"; done
+    echo "2) Журнал — цепочка хэшей:"; python3 nadzor.py log 5; python3 nadzor.py verify
+    echo "3) Подделка: меняю одну запись задним числом…"; sed -i '2s/ЗАПРЕЩЕНО/разрешено/' "$WH_JOURNAL"; python3 nadzor.py verify
+    echo "4) Пример отчёта сверки реального сервера: пример_отчёта_мой_сервер.md (775 пакетов, 16 к обновлению)";;
+  outside) # wh outside <IP> — проверка СНАРУЖИ без логина: версия по баннеру SSH -> сверка; веб — раскрытые версии
+    need "$1"; say "Проверка снаружи, без входа: рукопожатие SSH и по одному запросу на http/https. Сканирования нет."
+    J "outside: $1"; B=$(timeout 8 bash -c 'exec 3<>/dev/tcp/$0/22; head -n1 <&3' "$1" 2>/dev/null | tr -d '\r')
+    [ -n "$B" ] && echo "SSH: $B" || echo "SSH: порт 22 не отвечает"
+    printf 'http://%s\nhttps://%s\n' "$1" "$1" | timeout 40 httpx -silent -nc -sc -title -server -td -rl 5 > "out/web_$1_$TS.txt" 2>/dev/null; cat "out/web_$1_$TS.txt"
+    python3 check.py --outside "$1" "$B" "out/web_$1_$TS.txt"; J "outside: готово $1";;
+  plan)   # wh plan <IP> — план работ для админа (что делаю / чего не делаю / данные / остановка)
+    need "$1"; P="out/ПЛАН_$1_$TS.txt"
+    cat > "$P" <<EOP
+ПЛАН РАБОТ white_hat · $(date '+%d.%m.%Y %H:%M')
+Объект: $1 (единственный адрес в области работ)          Связь с админом: ________________
+
+ЧТО ДЕЛАЮ
+ 1. Сверка отпечатка ключа SSH (wh fp) — одно подключение, без входа.
+ 2. Сбор версий ПО и настроек (wh versions) — вход по выданной учётке, только команды чтения:
+    список пакетов (dpkg-query / rpm), слушающие порты (ss -tln), запущенные службы,
+    настройки SSH (sshd_config), версия ОС, имена учёток (без паролей). Файлов на сервере не создаю. ~1 мин.
+ 3. Проверка SSH (wh sshaudit) и HTTPS (wh tls) — обычные подключения, без атак.
+ 4. Сверка уязвимостей — у себя на ноутбуке (OSV.dev, trivy, grype). Сервер не нагружается.
+
+ЧЕГО НЕ ДЕЛАЮ
+ сканирование портов и сети · подбор паролей · нагрузку (DoS) · эксплуатацию уязвимостей ·
+ установку и изменения на сервере · sudo · копирование баз и персональных данных
+
+ДАННЫЕ
+ Список пакетов и настроек хранится только у меня, отчёт — вам. Ничего не публикуется.
+
+ОСТАНОВКА
+ По первому слову администратора. При любой нестабильности сервиса — останавливаюсь сам.
+
+КОНТРОЛЬ
+ Каждое действие (моё и ИИ) пишется в журнал с цепочкой хэшей SHA-256. В конце — итоговый хэш вам.
+ ИИ работает только через пульт: адреса — только из области; sudo, установка, сканеры — запрещены сторожем.
+
+Согласовано: ____________________ (админ)        ____________________ (исполнитель)
+EOP
+    cat "$P"; J "plan: план работ по $1 -> $P";;
+  about)  # wh about — схема «как работает» в браузере
+    J "about: открыта схема"; (xdg-open "$WH/about.html" || firefox "$WH/about.html") >/dev/null 2>&1 &;;
+  log)    python3 nadzor.py log "${1:-20}";;
+  undo)   python3 nadzor.py undo;;
+  verify) python3 nadzor.py verify;;
+  report) # wh report — один итоговый файл: что сделано, результаты, хэш журнала
+    say "Собираю итог и считаю хэш журнала — хэш остаётся у вас, после этого журнал нельзя тихо поменять."
+    R="out/ИТОГ_$TS.md"; { echo "# white_hat — итог $(date '+%F %H:%M')"; echo; echo "Область: $(grep -v '^#' scope.txt | tr '\n' ' ')"; echo; echo "## Файлы результатов"; ls -1 out | sed 's/^/- /'; echo; echo "## Журнал (последние записи)"; echo '```'; python3 nadzor.py log 40; echo '```'; echo; echo "## Проверка журнала"; python3 nadzor.py verify; } > "$R"
+    J "report: $R"; python3 nadzor.py verify; echo "итог: $R";;
+  *) cat <<'EOF'
+wh start <IP> [логин]   область + клятва           wh fp <IP>          отпечаток ключа сервера (сверить с админом)
+wh key                  мой ключ SSH (pub — админу) wh ssh <IP> [логин] вход, сессия пишется в logs/
+wh versions <IP> [лог.] версии ПО -> сверка OSV     wh check <файл>     сверить готовую выгрузку
+wh tls <IP> [порт]      HTTPS (testssl)             wh sshaudit <IP>    настройки SSH (без входа)
+wh web <IP>             веб: ответ, сервер, техн.   wh nuclei <IP>      только по отдельному разрешению
+wh code <папка>         разбор кода у себя          wh shell            терминал: каждая команда в журнал
+wh winversions <IP>     Windows-сервер (OpenSSH)    wh doctor           готовность: инструменты, ключ, базы, сеть
+wh outside <IP>         СНАРУЖИ без логина         wh plan <IP>        план работ для админа      wh about            схема «как работает» в браузере
+wh demo                 показ офлайн (сторож, хэши) wh log [N] | undo | verify | report
+EOF
+;;
+esac

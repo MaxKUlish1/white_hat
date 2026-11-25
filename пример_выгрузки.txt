@@ -1,0 +1,30 @@
+== host
+testhost
+Tue Nov 25 12:50:00 +05 2026
+Linux testhost 6.1.0-18-amd64 #1 SMP x86_64 GNU/Linux
+PRETTY_NAME="Debian GNU/Linux 12 (bookworm)"
+ID=debian
+VERSION_ID="12"
+VERSION="12 (bookworm)"
+== packages
+openssl 3.0.11-1~deb12u1 openssl
+libssl3 3.0.11-1~deb12u1 openssl
+openssh-server 1:9.2p1-2+deb12u1 openssh
+sudo 1.9.13p3-1+deb12u1 sudo
+nginx 1.22.1-9 nginx
+== config
+sshd_PermitRootLogin yes
+sshd_PasswordAuthentication default
+sshd_PubkeyAuthentication default
+sshd_X11Forwarding yes
+sshd_MaxAuthTries default
+reboot_required yes
+kernel_running 6.1.0-18-amd64
+uptime_days 214
+auto_updates none
+login_users root admin test webmaster
+uid0_users root
+firewall unknown
+== stack
+-- nginx -v
+nginx version: nginx/1.22.1
