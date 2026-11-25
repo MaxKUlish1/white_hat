@@ -381,11 +381,12 @@ def offline(path, sec, host, osname):
     for res in d.get("Results", []) or []:
         for v in res.get("Vulnerabilities") or []:
             key = (v.get("SrcName") or v["PkgName"], v.get("SrcVersion") or v.get("InstalledVersion", ""))
-            e = rows.setdefault(key, {"fixed": set(), "sev": collections.Counter(), "cves": set(), "open": 0})
+            e = rows.setdefault(key, {"fixed": set(), "sev": collections.Counter(), "cves": set(), "open": 0, "olist": []})
             if v.get("FixedVersion"):
                 e["fixed"].add(v["FixedVersion"]); e["sev"][v.get("Severity", "UNKNOWN")] += 1; e["cves"].add(v["VulnerabilityID"])
             else:
                 e["open"] += 1
+                e["olist"].append((v["VulnerabilityID"], v.get("Severity", "UNKNOWN"), (v.get("Title") or v.get("Description") or "")[:110]))
     order = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"]
     fix = sorted([(k, e) for k, e in rows.items() if e["fixed"]], key=lambda x: [-x[1]["sev"].get(s, 0) for s in order])
     opn = sorted([(k, e["open"]) for k, e in rows.items() if e["open"]], key=lambda x: -x[1])
@@ -406,14 +407,18 @@ def offline(path, sec, host, osname):
     PL, psum, _, _ = priorities([(pk, ver, max(e["fixed"], key=vkey), e["cves"]) for (pk, ver), e in fix])
     L[L.index("## Итог") + 2:L.index("## Итог") + 2] = ["- **" + psum + "**"]
     L += PL
-    L += ["", "## Без исправления пока", "", "| пакет | установлено | уязвимостей |", "|---|---|---|"] + ["| %s | %s | %d |" % (k[0], k[1], c) for k, c in opn[:25]]
+    olist = sorted([(order.index(sv) if sv in order else 9, cid, sv, k[0], k[1], tt) for k, e in rows.items() for cid, sv, tt in e["olist"]])
+    L += ["", "## Без исправления пока — закрывать настройкой и следить (%d)" % len(olist), "",
+          "| CVE | уровень | пакет | установлено | суть |", "|---|---|---|---|---|"] + ["| %s | %s | %s | %s | %s |" % (c, sv, pk, ver, tt) for _, c, sv, pk, ver, tt in olist[:40]]
     hy = hygiene(sec)
     if hy:
         L += ["", "## Гигиена сервера (настройки, только чтение)", ""] + ["- **%s** — %s" % (lv, tx) for lv, tx in hy]
     print("\nОБНОВИТЬ: %d пакетов · CRITICAL %d · HIGH %d · MEDIUM %d · LOW %d" % (len(fix), tot["CRITICAL"], tot["HIGH"], tot["MEDIUM"], tot["LOW"]))
     for (pk, ver), e in fix[:12]:
         print("  %-20s %-26s -> %-26s C%d H%d M%d" % (pk, ver, max(e["fixed"], key=vkey), e["sev"]["CRITICAL"], e["sev"]["HIGH"], e["sev"]["MEDIUM"]))
-    print("без исправления: %d пакетов" % len(opn))
+    print("БЕЗ ИСПРАВЛЕНИЯ (закрывать настройкой, следить): %d уязвимостей" % len(olist))
+    for _, c, sv, pk, ver, tt in olist[:10]:
+        print("  %-16s %-8s %-16s %s" % (c, sv, pk, tt[:80]))
     for lv, tx in hy:
         print("  [%s] %s" % (lv, tx))
     print("  " + psum)
@@ -462,6 +467,8 @@ def outside(host, banner, web):
     if web:
         L += ["", "## Веб", "", "```"] + web + ["```"]
         for l in web:
+            if re.search(r"\[(Welcome to nginx!|Apache2 (Ubuntu|Debian) Default Page[^\]]*|IIS Windows Server|Test Page for the (Apache|Nginx)[^\]]*)\]", l, re.I):
+                findings.append(("СРЕДНИЙ", "стандартная страница веб-сервера (%s) — сервер поставлен и не настроен: убрать или закрыть (%s)" % (re.search(r"\[([^\]]*(Welcome|Default|IIS|Test Page)[^\]]*)\]", l, re.I).group(1), l.split()[0])))
             for m in re.finditer(r"(nginx|Apache|PHP|Microsoft-IIS|OpenSSL|lighttpd|Tomcat|Jetty|Express|WordPress|Bitrix|Drupal|Joomla)[/ ]?([\d.]+\w*)", l, re.I):
                 findings.append(("НИЗКИЙ", "веб раскрывает версию: %s %s (%s) — скрыть в заголовках (server_tokens off / ServerTokens Prod / expose_php Off)" % (m.group(1), m.group(2), l.split()[0])))
     L += ["", "## Находки", ""] + ["- **%s** — %s" % f for f in findings]
@@ -524,6 +531,7 @@ def scan(path, force_offline=False):
             det[key] = vs
             if k % 40 == 0:
                 print("  …", k, "из", len(found), flush=True)
+    det_by_id = {d.get("id"): d for vs in det.values() for d in vs}
     fix_rows, open_rows = [], []
     for (n, v), vids in found.items():
         fx, op, lab, cv = set(), set(), collections.Counter(), set()
@@ -539,7 +547,7 @@ def scan(path, force_offline=False):
             target = max({f for _, f in fx}, key=vkey)
             fix_rows.append((n, v, target, len(fx), dict(lab), sorted(cv), pk[(n, v)]))
         if op:
-            open_rows.append((n, v, len(op), pk[(n, v)]))
+            open_rows.append((n, v, len(op), pk[(n, v)], [(vid, label(det_by_id.get(vid, {})) or "—", (det_by_id.get(vid, {}).get("summary") or "")[:100]) for vid, _ in sorted(op)]))
     fix_rows.sort(key=lambda r: (-sum(r[4].get(k, 0) for k in ("high", "critical", "бюллетень")), -r[3]))
     open_rows.sort(key=lambda r: -r[2])
     now = datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z")
@@ -558,7 +566,8 @@ def scan(path, force_offline=False):
     L[L.index("## Итог") + 2:L.index("## Итог") + 2] = ["- **" + psum + "**"]
     L += PL
     L += ["", "## Без исправления пока (следить за обновлениями)", "", "| пакет | установлено | уязвимостей |", "|---|---|---|"]
-    L += ["| %s | %s | %d |" % (n, v, c) for n, v, c, _ in open_rows[:25]]
+    L += ["| %s | %s | %d |" % (n, v, c) for n, v, c, _, _ in open_rows[:25]]
+    L += ["", "### Номера и суть (первые 40)", "", "| CVE/ID | метка | пакет | суть |", "|---|---|---|---|"] + ["| %s | %s | %s | %s |" % (i, lb, n, sm) for n, v, c, _, lst in open_rows for i, lb, sm in lst][:40]
     if failed:
         L += ["", "## НЕ ПРОВЕРЕНО: %d пакетов (база OSV не ответила) — повторить сверку" % len(failed), ""] + ["- %s %s" % k for k in failed]
     hy = hygiene(sec)
@@ -569,7 +578,9 @@ def scan(path, force_offline=False):
     print("\nОБНОВИТЬ (есть исправление): %d пакетов" % len(fix_rows))
     for n, v, t, c, lab, cv, bins in fix_rows[:12]:
         print("  %-22s %-28s -> %-28s уязв %-3d %s" % (n, v, t, c, " ".join(cv[:3])))
-    print("без исправления: %d пакетов" % len(open_rows))
+    print("без исправления: %d пакетов — номера и суть в отчёте" % len(open_rows))
+    for n, v, c, _, lst in open_rows[:5]:
+        print("  %-20s %s" % (n, ", ".join(i for i, _, _ in lst[:4])))
     if failed:
         print("  ВНИМАНИЕ: не проверено %d пакетов (OSV не ответил) — повтори wh check" % len(failed))
     for lv, tx in hy:
