@@ -409,16 +409,20 @@ def offline(path, sec, host, osname):
     L += PL
     olist = sorted([(order.index(sv) if sv in order else 9, cid, sv, k[0], k[1], tt) for k, e in rows.items() for cid, sv, tt in e["olist"]])
     L += ["", "## Без исправления пока — закрывать настройкой и следить (%d)" % len(olist), "",
-          "| CVE | уровень | пакет | установлено | суть |", "|---|---|---|---|---|"] + ["| %s | %s | %s | %s | %s |" % (c, sv, pk, ver, tt) for _, c, sv, pk, ver, tt in olist[:40]]
+          "| CVE | уровень | пакет | установлено | суть |", "|---|---|---|---|---|"] + ["| %s | %s | %s | %s | %s |" % (c, sv, pk, ver, tt) for _, c, sv, pk, ver, tt in olist]
     hy = hygiene(sec)
     if hy:
         L += ["", "## Гигиена сервера (настройки, только чтение)", ""] + ["- **%s** — %s" % (lv, tx) for lv, tx in hy]
     print("\nОБНОВИТЬ: %d пакетов · CRITICAL %d · HIGH %d · MEDIUM %d · LOW %d" % (len(fix), tot["CRITICAL"], tot["HIGH"], tot["MEDIUM"], tot["LOW"]))
     for (pk, ver), e in fix[:12]:
         print("  %-20s %-26s -> %-26s C%d H%d M%d" % (pk, ver, max(e["fixed"], key=vkey), e["sev"]["CRITICAL"], e["sev"]["HIGH"], e["sev"]["MEDIUM"]))
+    if len(fix) > 12:
+        print("  … ещё %d пакетов — полный список в отчёте" % (len(fix) - 12))
     print("БЕЗ ИСПРАВЛЕНИЯ (закрывать настройкой, следить): %d уязвимостей" % len(olist))
     for _, c, sv, pk, ver, tt in olist[:10]:
         print("  %-16s %-8s %-16s %s" % (c, sv, pk, tt[:80]))
+    if len(olist) > 10:
+        print("  … ещё %d — полный список в отчёте" % (len(olist) - 10))
     for lv, tx in hy:
         print("  [%s] %s" % (lv, tx))
     print("  " + psum)
@@ -566,8 +570,8 @@ def scan(path, force_offline=False):
     L[L.index("## Итог") + 2:L.index("## Итог") + 2] = ["- **" + psum + "**"]
     L += PL
     L += ["", "## Без исправления пока (следить за обновлениями)", "", "| пакет | установлено | уязвимостей |", "|---|---|---|"]
-    L += ["| %s | %s | %d |" % (n, v, c) for n, v, c, _, _ in open_rows[:25]]
-    L += ["", "### Номера и суть (первые 40)", "", "| CVE/ID | метка | пакет | суть |", "|---|---|---|---|"] + ["| %s | %s | %s | %s |" % (i, lb, n, sm) for n, v, c, _, lst in open_rows for i, lb, sm in lst][:40]
+    L += ["| %s | %s | %d |" % (n, v, c) for n, v, c, _, _ in open_rows]
+    L += ["", "### Номера и суть — полный список", "", "| CVE/ID | метка | пакет | суть |", "|---|---|---|---|"] + ["| %s | %s | %s | %s |" % (i, lb, n, sm) for n, v, c, _, lst in open_rows for i, lb, sm in lst]
     if failed:
         L += ["", "## НЕ ПРОВЕРЕНО: %d пакетов (база OSV не ответила) — повторить сверку" % len(failed), ""] + ["- %s %s" % k for k in failed]
     hy = hygiene(sec)
@@ -578,6 +582,8 @@ def scan(path, force_offline=False):
     print("\nОБНОВИТЬ (есть исправление): %d пакетов" % len(fix_rows))
     for n, v, t, c, lab, cv, bins in fix_rows[:12]:
         print("  %-22s %-28s -> %-28s уязв %-3d %s" % (n, v, t, c, " ".join(cv[:3])))
+    if len(fix_rows) > 12:
+        print("  … ещё %d пакетов — полный список в отчёте" % (len(fix_rows) - 12))
     print("без исправления: %d пакетов — номера и суть в отчёте" % len(open_rows))
     for n, v, c, _, lst in open_rows[:5]:
         print("  %-20s %s" % (n, ", ".join(i for i, _, _ in lst[:4])))
